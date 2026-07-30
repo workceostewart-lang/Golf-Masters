@@ -1,0 +1,16 @@
+# Golf Masters agent brief
+
+Treat `Golf-Masters-PRD.md` as the product source of truth.
+
+Current priority: Menu/UI first, followed by the playable solo course shell.
+
+Technical direction:
+- Three.js/WebGL renders the course and decorative menu scene.
+- Matter.js owns browser-side ball and obstacle physics.
+- The whole course, ball, and cup must remain visible on portrait mobile screens.
+- Desktop and touch controls must share the same drag-to-aim interaction.
+- Keep active match questions visible for the full answering period.
+- Use the core blue, green, and red palette with accessible contrast.
+- Sound effects must respect the saved sound preference.
+
+Before shipping, run the automated tests, production build, and rendered desktop/mobile browser checks.

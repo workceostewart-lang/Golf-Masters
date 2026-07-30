@@ -1,0 +1,22 @@
+{
+  "name": "golf-masters",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && node scripts/build-worker.mjs",
+    "preview": "vite preview",
+    "test": "node --test tests/game.test.mjs"
+  },
+  "dependencies": {
+    "matter-js": "0.20.0",
+    "three": "0.185.1"
+  },
+  "devDependencies": {
+    "vite": "8.1.5"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  }
+}
