@@ -4,8 +4,8 @@
   "compatibility_date": "2026-07-29",
   "routes": [
     {
-      "pattern": "golf-masters.fantomzone.app/*",
-      "zone_name": "fantomzone.app"
+      "pattern": "golf-masters.fantomzone.app",
+      "custom_domain": true
     }
   ],
   "assets": {
