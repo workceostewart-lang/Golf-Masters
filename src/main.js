@@ -2,12 +2,25 @@ import "./style.css";
 import * as THREE from "three";
 import Matter from "matter-js";
 import { celebrateShot, normalizeRoomCode, scorePower } from "./game-rules.js";
+import {
+  COURSE_CUP,
+  COURSE_LIBRARY_SIZE,
+  drawNextCourse,
+  generateCourseLayout,
+} from "./course-library.js";
 
 const { Engine, Bodies, Body, Composite } = Matter;
 const WORLD = { width: 420, height: 760 };
 const app = document.querySelector("#app");
 
 const saved = JSON.parse(localStorage.getItem("golf-masters-save") || "{}");
+const initialCycle = saved.courseCycle || {
+  seed: Math.floor(Math.random() * 0xffffffff),
+  cursor: 0,
+};
+const initialSelection = Number.isInteger(saved.courseId) && saved.courseId >= 1 && saved.courseId <= COURSE_LIBRARY_SIZE
+  ? { courseId: saved.courseId, cycle: initialCycle }
+  : drawNextCourse(initialCycle);
 const gameState = {
   sound: saved.sound !== false,
   hole: saved.hole || 41,
@@ -16,7 +29,13 @@ const gameState = {
   currentShots: 0,
   answerTimer: 15,
   answering: false,
+  courseId: initialSelection.courseId,
+  courseCycle: initialSelection.cycle,
+  playedCourseIds: Array.isArray(saved.playedCourseIds)
+    ? saved.playedCourseIds.filter((courseId) => Number.isInteger(courseId) && courseId >= 1 && courseId <= COURSE_LIBRARY_SIZE).slice(-12)
+    : [initialSelection.courseId],
 };
+let currentLayout = generateCourseLayout(gameState.courseId);
 
 app.innerHTML = `
   <main class="app-frame">
@@ -51,7 +70,7 @@ app.innerHTML = `
         <section class="course-teaser" aria-label="Featured course preview">
           <div class="teaser-head">
             <span>COURSE PREVIEW</span>
-            <strong>#041</strong>
+            <strong data-preview-course>#${String(currentLayout.id).padStart(3, "0")}</strong>
           </div>
           <div class="teaser-course" aria-hidden="true">
             <div class="teaser-hole"></div>
@@ -61,7 +80,7 @@ app.innerHTML = `
             <div class="teaser-wall wall-two"></div>
             <div class="teaser-ball"></div>
           </div>
-          <div class="teaser-foot"><span>COASTAL CIRCUIT</span><em>Tricky</em></div>
+          <div class="teaser-foot"><span data-preview-name>${currentLayout.name.toUpperCase()}</span><em data-preview-difficulty>${currentLayout.difficulty}</em></div>
         </section>
 
         <nav class="play-menu" aria-label="Play Golf Masters">
@@ -100,7 +119,7 @@ app.innerHTML = `
     <section class="game-view" data-view="game" hidden>
       <header class="game-toolbar">
         <button class="exit-button" data-action="exit-game">← <span>EXIT</span></button>
-        <div class="hole-title"><small>COASTAL CIRCUIT</small><strong>HOLE ${String(gameState.hole).padStart(3, "0")}</strong></div>
+        <div class="hole-title"><small data-course-name>${currentLayout.name.toUpperCase()}</small><strong data-hole-number>HOLE ${String(gameState.hole).padStart(3, "0")}</strong></div>
         <div class="shot-pill"><small>SHOTS</small><strong data-shot-count>0</strong></div>
         <button class="icon-button light" data-action="sound" aria-label="Toggle sound"><span data-sound-icon>♫</span></button>
       </header>
@@ -138,14 +157,15 @@ app.innerHTML = `
         <aside class="game-sidebar">
           <div class="round-card">
             <p>SOLO RUN</p>
-            <strong>Course ${String(gameState.hole).padStart(3, "0")} <span>/ 1,500</span></strong>
+            <strong>Course <b data-round-number>${String(gameState.hole).padStart(3, "0")}</b> <span>/ 1,500</span></strong>
+            <small>Library layout <b data-layout-number>#${String(currentLayout.id).padStart(3, "0")}</b></small>
             <div class="progress-track"><i style="width: 31%"></i></div>
           </div>
           <div class="objective-card">
             <span class="card-number">01</span>
             <small>YOUR OBJECTIVE</small>
             <h2>Find the line.<br>Sink the putt.</h2>
-            <p>Use the coral bumpers to bank around the rotating gate. The blue current pushes northeast.</p>
+            <p data-course-objective>Use the coral bumpers to bank around the rotating gate and read the blue current.</p>
           </div>
           <div class="tip-card"><span>PRO TIP</span><p>Short drags give you more control around narrow gates.</p></div>
           <div class="legend-card"><span><i class="dot ball-dot"></i> Ball</span><span><i class="dot cup-dot"></i> Cup</span><span><i class="dot wind-dot"></i> Wind</span></div>
@@ -198,7 +218,19 @@ function persist() {
     hole: gameState.hole,
     best: gameState.best,
     totalShots: gameState.totalShots,
+    courseId: gameState.courseId,
+    courseCycle: gameState.courseCycle,
+    playedCourseIds: gameState.playedCourseIds,
   }));
+}
+
+function recentCourseMarkup() {
+  const recentIds = [...new Set([...gameState.playedCourseIds, gameState.courseId])].slice(-12).reverse();
+  return recentIds.map((courseId) => `
+    <button class="${courseId === gameState.courseId ? "current" : ""}" disabled>
+      <span>#${String(courseId).padStart(3, "0")}</span>
+      <i>${courseId === gameState.courseId ? "PLAYING" : "CLEARED"}</i>
+    </button>`).join("");
 }
 
 function setSoundLabels() {
@@ -214,6 +246,26 @@ function toast(message) {
   element.classList.add("visible");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => element.classList.remove("visible"), 2600);
+}
+
+function windArrow(force) {
+  const angle = Math.atan2(-force.y, force.x);
+  if (angle > Math.PI * 0.75 || angle <= -Math.PI * 0.75) return "←";
+  if (angle > Math.PI * 0.25) return "↑";
+  if (angle > -Math.PI * 0.25) return "→";
+  return "↓";
+}
+
+function syncCourseUi(layout) {
+  document.querySelector("[data-course-name]").textContent = layout.name.toUpperCase();
+  document.querySelector("[data-hole-number]").textContent = `HOLE ${String(gameState.hole).padStart(3, "0")}`;
+  document.querySelector("[data-round-number]").textContent = String(gameState.hole).padStart(3, "0");
+  document.querySelector("[data-layout-number]").textContent = `#${String(layout.id).padStart(3, "0")}`;
+  document.querySelector("[data-preview-course]").textContent = `#${String(layout.id).padStart(3, "0")}`;
+  document.querySelector("[data-preview-name]").textContent = layout.name.toUpperCase();
+  document.querySelector("[data-preview-difficulty]").textContent = layout.difficulty;
+  document.querySelector("[data-course-objective]").textContent = `Bank around ${layout.walls.length} coral bumpers and the rotating gate. The blue current pushes ${windArrow(layout.wind.force)}.`;
+  document.querySelector(".wind-label span").textContent = windArrow(layout.wind.force);
 }
 
 function openModal(kind) {
@@ -236,9 +288,9 @@ function openModal(kind) {
       <p class="modal-eyebrow">PLAYER CARD</p><h2 id="modal-title">Lexington's season.</h2>
       <div class="stat-grid"><div><b>${gameState.hole - 1}</b><span>Courses cleared</span></div><div><b>${gameState.best}</b><span>Best shots</span></div><div><b>${gameState.totalShots}</b><span>Total shots</span></div><div><b>12</b><span>Hole-in-ones</span></div></div>`,
     courses: `
-      <p class="modal-eyebrow">COURSE SELECT</p><h2 id="modal-title">Coastal Circuit.</h2>
-      <p>Replay any cleared course or continue your current run.</p>
-      <div class="course-grid">${Array.from({ length: 12 }, (_, index) => `<button class="${index === 4 ? "current" : ""}"><span>${String(37 + index).padStart(3, "0")}</span><i>${index < 4 ? "★" : index === 4 ? "PLAY" : "🔒"}</i></button>`).join("")}</div>`,
+      <p class="modal-eyebrow">COURSE CYCLE</p><h2 id="modal-title">${currentLayout.name}.</h2>
+      <p>Every next hole draws an unplayed layout. All ${COURSE_LIBRARY_SIZE.toLocaleString()} library courses are cycled before the deck reshuffles.</p>
+      <div class="course-grid">${recentCourseMarkup()}</div>`,
     settings: `
       <p class="modal-eyebrow">SETTINGS</p><h2 id="modal-title">Make it yours.</h2>
       <div class="setting-row"><span><b>Sound effects</b><small>Shots, UI and celebrations</small></span><button class="toggle ${gameState.sound ? "on" : ""}" data-action="sound"><i></i></button></div>
@@ -354,14 +406,12 @@ function initCourse() {
   }
 
   const engine = Engine.create({ gravity: { x: 0, y: 0 } });
-  const walls = [
+  const boundaryWalls = [
     { x: 11, y: 380, w: 22, h: 760 }, { x: 409, y: 380, w: 22, h: 760 },
     { x: 210, y: 11, w: 420, h: 22 }, { x: 210, y: 749, w: 420, h: 22 },
-    { x: 106, y: 505, w: 150, h: 18, a: -0.18 }, { x: 322, y: 363, w: 150, h: 18, a: 0.22 },
-    { x: 95, y: 238, w: 126, h: 18, a: -0.12 },
   ];
   const wallMaterial = new THREE.MeshStandardMaterial({ color: 0xf0554f, roughness: 0.58 });
-  walls.forEach(({ x, y, w, h, a = 0 }) => {
+  boundaryWalls.forEach(({ x, y, w, h, a = 0 }) => {
     Composite.add(engine.world, Bodies.rectangle(x, y, w, h, { isStatic: true, angle: a, restitution: 0.86 }));
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, 22), wallMaterial);
     mesh.position.copy(coursePoint(x, y, 7));
@@ -370,40 +420,13 @@ function initCourse() {
     scene.add(mesh);
   });
 
-  const spinnerBody = Bodies.rectangle(212, 335, 136, 15, { isStatic: true, restitution: 0.9 });
-  Composite.add(engine.world, spinnerBody);
-  const spinner = new THREE.Group();
-  const spinnerBar = new THREE.Mesh(new THREE.BoxGeometry(136, 15, 17), new THREE.MeshStandardMaterial({ color: 0x0b2851, roughness: 0.4 }));
-  const spinnerCore = new THREE.Mesh(new THREE.CylinderGeometry(14, 14, 24, 24), new THREE.MeshStandardMaterial({ color: 0xffca4b }));
-  spinnerCore.rotation.x = Math.PI / 2;
-  spinner.add(spinnerBar, spinnerCore);
-  spinner.position.copy(coursePoint(212, 335, 12));
-  scene.add(spinner);
-
-  const holePoint = { x: 300, y: 84 };
-  const hole = new THREE.Mesh(new THREE.CircleGeometry(15, 32), new THREE.MeshBasicMaterial({ color: 0x07101e }));
-  hole.position.copy(coursePoint(holePoint.x, holePoint.y, -1));
-  scene.add(hole);
-  const cupRing = new THREE.Mesh(new THREE.RingGeometry(15, 19, 32), new THREE.MeshBasicMaterial({ color: 0xf8fff7 }));
-  cupRing.position.copy(coursePoint(holePoint.x, holePoint.y, 0));
-  scene.add(cupRing);
-
-  const flagPole = new THREE.Mesh(new THREE.BoxGeometry(3, 70, 4), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-  flagPole.position.copy(coursePoint(holePoint.x, holePoint.y - 35, 2));
-  scene.add(flagPole);
-  const flag = new THREE.Mesh(new THREE.PlaneGeometry(40, 22), new THREE.MeshBasicMaterial({ color: 0xf0554f, side: THREE.DoubleSide }));
-  flag.position.copy(coursePoint(holePoint.x + 19, holePoint.y - 61, 4));
-  scene.add(flag);
-
-  const windMaterial = new THREE.LineBasicMaterial({ color: 0x9be8ff, transparent: true, opacity: 0.62 });
-  const windLines = [];
-  for (let index = 0; index < 8; index += 1) {
-    const geometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-24, -12, 1), new THREE.Vector3(24, 12, 1)]);
-    const line = new THREE.Line(geometry, windMaterial);
-    line.position.copy(coursePoint(55 + (index % 4) * 70, 410 + Math.floor(index / 4) * 54, 2));
-    scene.add(line);
-    windLines.push(line);
-  }
+  const dynamicGroup = new THREE.Group();
+  scene.add(dynamicGroup);
+  let dynamicBodies = [];
+  let spinnerBody;
+  let spinner;
+  let holePoint = { ...currentLayout.cup };
+  let windLines = [];
 
   const ballBody = Bodies.circle(210, 666, 10, { restitution: 0.82, friction: 0.003, frictionAir: 0.018, density: 0.002 });
   Composite.add(engine.world, ballBody);
@@ -433,7 +456,7 @@ function initCourse() {
   }
 
   function ballIsReady() {
-    return Math.hypot(ballBody.velocity.x, ballBody.velocity.y) < 0.22 && !document.querySelector("[data-celebration]").hidden === false;
+    return Math.hypot(ballBody.velocity.x, ballBody.velocity.y) < 0.22 && document.querySelector("[data-celebration]").hidden;
   }
 
   canvas.addEventListener("pointerdown", (event) => {
@@ -500,13 +523,111 @@ function initCourse() {
   function resetBall() {
     gameState.currentShots = 0;
     document.querySelector("[data-shot-count]").textContent = "0";
-    Body.setPosition(ballBody, { x: 210, y: 666 });
+    Body.setPosition(ballBody, currentLayout.start);
     Body.setVelocity(ballBody, { x: 0, y: 0 });
+    Body.setAngularVelocity(ballBody, 0);
     ball.scale.setScalar(1);
     document.querySelector("[data-celebration]").hidden = true;
     document.querySelector("[data-turn-banner]").textContent = "YOUR TURN";
     status.textContent = "Drag back from the ball • Release to shoot";
   }
+
+  function clearDynamicCourse() {
+    dynamicBodies.forEach((body) => Composite.remove(engine.world, body));
+    dynamicBodies = [];
+    dynamicGroup.traverse((object) => {
+      object.geometry?.dispose();
+      if (object.material && object.material !== wallMaterial) {
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        materials.forEach((material) => material.dispose());
+      }
+    });
+    dynamicGroup.clear();
+    windLines = [];
+  }
+
+  function loadCourse(layout) {
+    clearDynamicCourse();
+    currentLayout = layout;
+    holePoint = { ...layout.cup };
+    course.material.color.setHex(layout.fairwayColor);
+
+    layout.walls.forEach(({ x, y, w, h, a = 0 }) => {
+      const body = Bodies.rectangle(x, y, w, h, { isStatic: true, angle: a, restitution: 0.86 });
+      Composite.add(engine.world, body);
+      dynamicBodies.push(body);
+
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, 22), wallMaterial);
+      mesh.position.copy(coursePoint(x, y, 7));
+      mesh.rotation.z = -a;
+      mesh.castShadow = true;
+      dynamicGroup.add(mesh);
+    });
+
+    spinnerBody = Bodies.rectangle(layout.spinner.x, layout.spinner.y, layout.spinner.width, 15, {
+      isStatic: true,
+      angle: layout.spinner.angle,
+      restitution: 0.9,
+    });
+    Composite.add(engine.world, spinnerBody);
+    dynamicBodies.push(spinnerBody);
+
+    spinner = new THREE.Group();
+    const spinnerBar = new THREE.Mesh(
+      new THREE.BoxGeometry(layout.spinner.width, 15, 17),
+      new THREE.MeshStandardMaterial({ color: 0x0b2851, roughness: 0.4 })
+    );
+    const spinnerCore = new THREE.Mesh(
+      new THREE.CylinderGeometry(14, 14, 24, 24),
+      new THREE.MeshStandardMaterial({ color: 0xffca4b })
+    );
+    spinnerCore.rotation.x = Math.PI / 2;
+    spinner.add(spinnerBar, spinnerCore);
+    spinner.position.copy(coursePoint(layout.spinner.x, layout.spinner.y, 12));
+    spinner.rotation.z = -layout.spinner.angle;
+    dynamicGroup.add(spinner);
+
+    const hole = new THREE.Mesh(
+      new THREE.CircleGeometry(COURSE_CUP.visualRadius, 40),
+      new THREE.MeshBasicMaterial({ color: 0x07101e })
+    );
+    hole.position.copy(coursePoint(holePoint.x, holePoint.y, -1));
+    dynamicGroup.add(hole);
+    const cupRing = new THREE.Mesh(
+      new THREE.RingGeometry(COURSE_CUP.visualRadius, COURSE_CUP.ringRadius, 40),
+      new THREE.MeshBasicMaterial({ color: 0xf8fff7 })
+    );
+    cupRing.position.copy(coursePoint(holePoint.x, holePoint.y, 0));
+    dynamicGroup.add(cupRing);
+
+    const flagPole = new THREE.Mesh(new THREE.BoxGeometry(3, 70, 4), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+    flagPole.position.copy(coursePoint(holePoint.x, holePoint.y - 35, 2));
+    dynamicGroup.add(flagPole);
+    const flag = new THREE.Mesh(
+      new THREE.PlaneGeometry(40, 22),
+      new THREE.MeshBasicMaterial({ color: 0xf0554f, side: THREE.DoubleSide })
+    );
+    flag.position.copy(coursePoint(holePoint.x + 19, holePoint.y - 61, 4));
+    dynamicGroup.add(flag);
+
+    const windMaterial = new THREE.LineBasicMaterial({ color: 0x9be8ff, transparent: true, opacity: 0.62 });
+    const windRotation = Math.atan2(-layout.wind.force.y, layout.wind.force.x);
+    for (let index = 0; index < 8; index += 1) {
+      const geometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(-25, 0, 1), new THREE.Vector3(25, 0, 1)]);
+      const line = new THREE.Line(geometry, windMaterial);
+      const x = layout.wind.x + 20 + (index % 4) * ((layout.wind.width - 40) / 3);
+      const y = layout.wind.y + 20 + Math.floor(index / 4) * (layout.wind.height - 40);
+      line.position.copy(coursePoint(x, y, 2));
+      line.rotation.z = windRotation;
+      dynamicGroup.add(line);
+      windLines.push(line);
+    }
+
+    syncCourseUi(layout);
+    resetBall();
+  }
+
+  loadCourse(currentLayout);
 
   function resize() {
     const bounds = canvas.getBoundingClientRect();
@@ -521,17 +642,25 @@ function initCourse() {
     previous = time;
     Engine.update(engine, delta);
 
-    const spinnerAngle = time * 0.00065;
+    const spinnerAngle = currentLayout.spinner.angle + time * currentLayout.spinner.speed;
     Body.setAngle(spinnerBody, spinnerAngle);
     spinner.rotation.z = -spinnerAngle;
 
-    if (ballBody.position.y > 375 && ballBody.position.y < 490 && ballBody.position.x < 330) {
-      Body.applyForce(ballBody, ballBody.position, { x: 0.000024, y: -0.000018 });
+    const wind = currentLayout.wind;
+    if (
+      ballBody.position.x > wind.x && ballBody.position.x < wind.x + wind.width
+      && ballBody.position.y > wind.y && ballBody.position.y < wind.y + wind.height
+    ) {
+      Body.applyForce(ballBody, ballBody.position, wind.force);
     }
 
     windLines.forEach((line, index) => {
-      line.position.x += 0.18 + (index % 3) * 0.03;
-      if (line.position.x > 130) line.position.x = -170;
+      line.position.x += currentLayout.wind.force.x * (7600 + (index % 3) * 900);
+      line.position.y -= currentLayout.wind.force.y * (7600 + (index % 3) * 900);
+      if (line.position.x > WORLD.width / 2) line.position.x = -WORLD.width / 2;
+      if (line.position.x < -WORLD.width / 2) line.position.x = WORLD.width / 2;
+      if (line.position.y > WORLD.height / 2) line.position.y = -WORLD.height / 2;
+      if (line.position.y < -WORLD.height / 2) line.position.y = WORLD.height / 2;
     });
 
     ball.position.copy(coursePoint(ballBody.position.x, ballBody.position.y, 16));
@@ -540,13 +669,13 @@ function initCourse() {
 
     const holeDistance = Math.hypot(ballBody.position.x - holePoint.x, ballBody.position.y - holePoint.y);
     const speed = Math.hypot(ballBody.velocity.x, ballBody.velocity.y);
-    if (holeDistance < 33 && speed < 4.4 && document.querySelector("[data-celebration]").hidden) {
+    if (holeDistance < COURSE_CUP.magnetRadius && speed < 5.2 && document.querySelector("[data-celebration]").hidden) {
       const pull = 0.00011;
       Body.applyForce(ballBody, ballBody.position, {
         x: (holePoint.x - ballBody.position.x) * pull,
         y: (holePoint.y - ballBody.position.y) * pull,
       });
-      if (holeDistance < 13) sinkBall();
+      if (holeDistance < COURSE_CUP.captureRadius) sinkBall();
     }
 
     if (!drag.active && speed < 0.22 && document.querySelector("[data-celebration]").hidden) {
@@ -559,10 +688,20 @@ function initCourse() {
   }
   requestAnimationFrame(render);
 
-  return { resetBall };
+  return { loadCourse, resetBall };
 }
 
 let courseApi;
+function advanceCourse() {
+  const selection = drawNextCourse(gameState.courseCycle, gameState.playedCourseIds);
+  gameState.courseId = selection.courseId;
+  gameState.courseCycle = selection.cycle;
+  gameState.hole = gameState.hole >= COURSE_LIBRARY_SIZE ? 1 : gameState.hole + 1;
+  gameState.playedCourseIds = [...gameState.playedCourseIds, selection.courseId].slice(-12);
+  currentLayout = generateCourseLayout(selection.courseId);
+  return currentLayout;
+}
+
 function beginQuestion() {
   gameState.answerTimer = 15;
   gameState.answering = true;
@@ -633,11 +772,11 @@ document.addEventListener("click", (event) => {
     else toast(`Looking for room ${code}…`);
   }
   if (action === "next-hole") {
-    gameState.hole += 1;
+    const nextLayout = advanceCourse();
     persist();
-    courseApi.resetBall();
+    courseApi.loadCourse(nextLayout);
     beginQuestion();
-    toast(`Course ${String(gameState.hole).padStart(3, "0")} ready`);
+    toast(`New course #${String(nextLayout.id).padStart(3, "0")} ready`);
   }
 });
 
@@ -658,5 +797,6 @@ document.querySelector("[data-modal]").addEventListener("click", (event) => {
   if (event.target.matches("[data-modal]")) closeModal();
 });
 
+persist();
 setSoundLabels();
 initMenuScene();

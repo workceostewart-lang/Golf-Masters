@@ -1136,6 +1136,20 @@ input:focus-visible {
   font-size: 10px;
 }
 
+.round-card > small {
+  display: block;
+  margin-top: 6px;
+  color: #7189a3;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.round-card > small b {
+  color: var(--green);
+}
+
 .progress-track {
   height: 4px;
   margin-top: 13px;
@@ -1467,6 +1481,15 @@ input:focus-visible {
 .course-grid button.current {
   border-color: var(--green);
   background: rgba(52, 207, 122, 0.11);
+}
+
+.course-grid button:disabled {
+  cursor: default;
+  opacity: 0.82;
+}
+
+.course-grid button.current:disabled {
+  opacity: 1;
 }
 
 .course-grid span { font-size: 11px; font-weight: 900; }
